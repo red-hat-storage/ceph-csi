@@ -447,11 +447,20 @@ func (vs *VolumeGroupServer) ModifyVolumeGroupMembership(
 		}
 
 		log.DebugLog(ctx, "local status is %v and local state is %v", localStatus.IsUP(), localStatus.GetState())
-		if !vgrMirrorInfo.IsPrimary() ||
-			(localStatus.IsUP() && localStatus.GetState() != librbd.MirrorGroupStatusStateStopped.String()) {
-			log.DebugLog(ctx, "skipping modification of group, as it is in secondary/promoting state")
+		if !vgrMirrorInfo.IsPrimary() {
+			log.DebugLog(ctx, "skipping modification of group, as it is in secondary state")
 
 			return &volumegroup.ModifyVolumeGroupMembershipResponse{}, nil
+		}
+
+		if vgrMirrorInfo.IsPrimary() && localStatus.IsUP() &&
+			localStatus.GetState() != librbd.MirrorGroupStatusStateStopped.String() {
+			log.ErrorLog(ctx, "can't modify group, as it is in promoting state")
+
+			return nil, status.Errorf(
+				codes.Internal,
+				"can't modify group, as it is in promoting state %q",
+				req.GetVolumeGroupId())
 		}
 
 		remoteSiteStatus, err := sts.GetRemoteSiteStatus(ctx)
