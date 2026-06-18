@@ -1,6 +1,6 @@
 module github.com/ceph/ceph-csi/actions/retest
 
-go 1.25.0
+go 1.25.2
 
 require (
 	github.com/google/go-github v17.0.0+incompatible
