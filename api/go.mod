@@ -2,7 +2,7 @@ module github.com/ceph/ceph-csi/api
 
 go 1.24.0
 
-toolchain go1.24.1
+toolchain go1.24.2
 
 require (
 	github.com/ghodss/yaml v1.0.0
