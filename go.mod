@@ -1,6 +1,6 @@
 module github.com/ceph/ceph-csi
 
-go 1.25.0
+go 1.26.1
 
 // our own API
 replace github.com/ceph/ceph-csi/api => ./api
