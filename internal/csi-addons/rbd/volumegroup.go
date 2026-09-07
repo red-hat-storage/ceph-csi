@@ -557,14 +557,17 @@ func (vs *VolumeGroupServer) ModifyVolumeGroupMembership(
 	}
 
 	// Skip modification if there is no change to volumes list that are part of group
-	if len(toRemove) == 0 && len(toAdd) == 0 {
+	// We should also check if mirroring is enabled before exiting early, as it can be
+	// possible that the group is left disabled from a previous incomplete call of ModifyVolumeGroup
+	// and we should continue the call this time to re-enable mirroring.
+	if len(toRemove) == 0 && len(toAdd) == 0 && isMirroringEnabled {
 		log.DebugLog(ctx, "skipping modification of group, as there are no changes to volumes in the group")
 
 		return &volumegroup.ModifyVolumeGroupMembershipResponse{}, nil
 	}
 
-	// Disable mirroring before modifying the volume group
-	if isMirroringEnabled {
+	// Disable mirroring only if no new volumes are added to the group
+	if len(toAdd) == 0 && isMirroringEnabled {
 		// extract the force option
 		force, err := getForceOption(ctx, req.GetParameters())
 		if err != nil {
@@ -637,33 +640,36 @@ func (vs *VolumeGroupServer) ModifyVolumeGroupMembership(
 		}
 	}
 
-	// Enable mirroring after modification of volume group
+	// Enable mirroring only if no new volumes are added to the volume group, as the
+	// group was disabled for the same earlier
 	// extract the mirroring mode
-	mirroringMode, err := getMirroringMode(ctx, req.GetParameters())
-	if err != nil {
-		return nil, err
-	}
-	err = mirror.EnableMirroring(ctx, mirroringMode)
-	if err != nil {
-		log.ErrorLog(ctx, "failed to enable mirroring after modifying volume group")
-
-		return nil, getGRPCError(err)
-	}
-
-	// Need to add scheduling again since disabling mirroring may have
-	// removed snapshot schedule too.
-	interval, startTime := getSchedulingDetails(req.GetParameters())
-	if interval != admin.NoInterval {
-		err = mirror.AddSnapshotScheduling(interval, startTime)
+	if len(toAdd) == 0 {
+		mirroringMode, err := getMirroringMode(ctx, req.GetParameters())
 		if err != nil {
 			return nil, err
 		}
-		log.DebugLog(
-			ctx,
-			"Added scheduling at interval %s, start time %s for group %s",
-			interval,
-			startTime,
-			vg)
+		err = mirror.EnableMirroring(ctx, mirroringMode)
+		if err != nil {
+			log.ErrorLog(ctx, "failed to enable mirroring after modifying volume group")
+
+			return nil, getGRPCError(err)
+		}
+
+		// Need to add scheduling again since disabling mirroring may have
+		// removed snapshot schedule too.
+		interval, startTime := getSchedulingDetails(req.GetParameters())
+		if interval != admin.NoInterval {
+			err = mirror.AddSnapshotScheduling(interval, startTime)
+			if err != nil {
+				return nil, err
+			}
+			log.DebugLog(
+				ctx,
+				"Added scheduling at interval %s, start time %s for group %s",
+				interval,
+				startTime,
+				vg)
+		}
 	}
 
 	csiVG, err := vg.ToCSI(ctx)
