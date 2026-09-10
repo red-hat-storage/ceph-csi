@@ -37,6 +37,7 @@ import (
 	"k8s.io/kubernetes/pkg/volume"
 	mount "k8s.io/mount-utils"
 
+	"github.com/ceph/ceph-csi/internal/util"
 	"github.com/ceph/ceph-csi/internal/util/log"
 )
 
@@ -469,6 +470,9 @@ func killOnSlowGRPCWithThreshold(
 		case <-timer.C:
 			log.ExtendedLog(ctx,
 				"gRPC call %s stuck for %s, restarting process", info.FullMethod, threshold)
+			if !util.CleanupConnections() {
+				log.ExtendedLog(ctx, "timed out closing Ceph connections, exiting anyway")
+			}
 			osExit(1)
 		case <-done:
 		}
@@ -655,6 +659,30 @@ func IsReaderOnly(caps []*csi.VolumeCapability) bool {
 	}
 
 	return false
+}
+
+// AreAllCapabilitiesReaderOnly returns true when all capabilities use a reader-only access mode.
+func AreAllCapabilitiesReaderOnly(caps []*csi.VolumeCapability) bool {
+	if len(caps) == 0 {
+		return false
+	}
+
+	for _, cap := range caps {
+		accessMode := cap.GetAccessMode()
+		if accessMode == nil {
+			return false
+		}
+
+		switch accessMode.GetMode() { //nolint:exhaustive // only check what we want
+		case csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
+			csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY:
+			continue
+		default:
+			return false
+		}
+	}
+
+	return true
 }
 
 // IsBlockMultiWriter validates the volume capability slice against the access modes and access type.

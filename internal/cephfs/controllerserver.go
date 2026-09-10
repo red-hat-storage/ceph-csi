@@ -207,6 +207,9 @@ func (cs *cephfsControllerServer) checkContentSource(
 			if errors.Is(err, cerrors.ErrSnapNotFound) {
 				return nil, nil, nil, status.Error(codes.NotFound, err.Error())
 			}
+			if errors.Is(err, cerrors.ErrInvalidVolID) {
+				return nil, nil, nil, status.Error(codes.InvalidArgument, err.Error())
+			}
 
 			return nil, nil, nil, status.Error(codes.Internal, err.Error())
 		}
@@ -564,6 +567,13 @@ func (cs *cephfsControllerServer) DeleteVolume(
 		}
 
 		log.ErrorLog(ctx, "Error returned from newVolumeOptionsFromVolID: %v", err)
+
+		if errors.Is(err, cerrors.ErrInvalidVolID) {
+			// likely a static provisioned volume with a volume handle that
+			// was never encoded by ceph-csi; retrying will never succeed,
+			// so return a terminal error instead of codes.Internal.
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
 
 		// All errors other than ErrVolumeNotFound should return an error back to the caller
 		if !errors.Is(err, cerrors.ErrVolumeNotFound) {
@@ -1052,44 +1062,7 @@ func (cs *cephfsControllerServer) DeleteSnapshot(
 	volOpt, snapInfo, sid, err := store.NewSnapshotOptionsFromID(ctx, snapshotID, cr,
 		req.GetSecrets(), cs.ClusterName)
 	if err != nil {
-		switch {
-		case errors.Is(err, util.ErrPoolNotFound):
-			// if error is ErrPoolNotFound, the pool is already deleted we dont
-			// need to worry about deleting snapshot or omap data, return success
-			log.WarningLog(ctx, "failed to get backend snapshot for %s: %v", snapshotID, err)
-
-			return &csi.DeleteSnapshotResponse{}, nil
-		case errors.Is(err, util.ErrKeyNotFound):
-			// if error is ErrKeyNotFound, then a previous attempt at deletion was complete
-			// or partially complete (snap and snapOMap are garbage collected already), hence return
-			// success as deletion is complete
-			return &csi.DeleteSnapshotResponse{}, nil
-		case errors.Is(err, cerrors.ErrSnapNotFound):
-			err = store.UndoSnapReservation(ctx, volOpt, *sid, sid.RequestName, cr)
-			if err != nil {
-				log.ErrorLog(ctx, "failed to remove reservation for snapname (%s) with backing snap (%s) (%s)",
-					sid.RequestName, sid.FsSnapshotName, err)
-
-				return nil, status.Error(codes.Internal, err.Error())
-			}
-
-			return &csi.DeleteSnapshotResponse{}, nil
-		case errors.Is(err, cerrors.ErrVolumeNotFound):
-			// if the error is ErrVolumeNotFound, the subvolume is already deleted
-			// from backend, Hence undo the omap entries and return success
-			log.ErrorLog(ctx, "Volume not present")
-			err = store.UndoSnapReservation(ctx, volOpt, *sid, sid.RequestName, cr)
-			if err != nil {
-				log.ErrorLog(ctx, "failed to remove reservation for snapname (%s) with backing snap (%s) (%s)",
-					sid.RequestName, sid.FsSnapshotName, err)
-
-				return nil, status.Error(codes.Internal, err.Error())
-			}
-
-			return &csi.DeleteSnapshotResponse{}, nil
-		default:
-			return nil, status.Error(codes.Internal, err.Error())
-		}
+		return handleSnapshotOptionsError(ctx, err, snapshotID, volOpt, sid, cr)
 	}
 	defer volOpt.Destroy()
 
@@ -1131,6 +1104,63 @@ func (cs *cephfsControllerServer) DeleteSnapshot(
 	}
 
 	return &csi.DeleteSnapshotResponse{}, nil
+}
+
+// handleSnapshotOptionsError translates an error returned by
+// store.NewSnapshotOptionsFromID() into a DeleteSnapshot result. Errors
+// showing that the snapshot, its subvolume or its pool is already gone are
+// reported as a successful deletion, undoing the reservation where needed.
+func handleSnapshotOptionsError(
+	ctx context.Context,
+	err error,
+	snapshotID string,
+	volOpt *store.VolumeOptions,
+	sid *store.SnapshotIdentifier,
+	cr *util.Credentials,
+) (*csi.DeleteSnapshotResponse, error) {
+	switch {
+	case errors.Is(err, util.ErrPoolNotFound):
+		// if error is ErrPoolNotFound, the pool is already deleted we dont
+		// need to worry about deleting snapshot or omap data, return success
+		log.WarningLog(ctx, "failed to get backend snapshot for %s: %v", snapshotID, err)
+
+		return &csi.DeleteSnapshotResponse{}, nil
+	case errors.Is(err, util.ErrKeyNotFound):
+		// if error is ErrKeyNotFound, then a previous attempt at deletion was complete
+		// or partially complete (snap and snapOMap are garbage collected already), hence return
+		// success as deletion is complete
+		return &csi.DeleteSnapshotResponse{}, nil
+	case errors.Is(err, cerrors.ErrSnapNotFound):
+		err = store.UndoSnapReservation(ctx, volOpt, *sid, sid.RequestName, cr)
+		if err != nil {
+			log.ErrorLog(ctx, "failed to remove reservation for snapname (%s) with backing snap (%s) (%s)",
+				sid.RequestName, sid.FsSnapshotName, err)
+
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+
+		return &csi.DeleteSnapshotResponse{}, nil
+	case errors.Is(err, cerrors.ErrInvalidVolID):
+		// likely a static provisioned snapshot with a snapshot handle
+		// that was never encoded by ceph-csi; retrying will never
+		// succeed, so return a terminal error instead of codes.Internal.
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	case errors.Is(err, cerrors.ErrVolumeNotFound):
+		// if the error is ErrVolumeNotFound, the subvolume is already deleted
+		// from backend, Hence undo the omap entries and return success
+		log.ErrorLog(ctx, "Volume not present")
+		err = store.UndoSnapReservation(ctx, volOpt, *sid, sid.RequestName, cr)
+		if err != nil {
+			log.ErrorLog(ctx, "failed to remove reservation for snapname (%s) with backing snap (%s) (%s)",
+				sid.RequestName, sid.FsSnapshotName, err)
+
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+
+		return &csi.DeleteSnapshotResponse{}, nil
+	default:
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 }
 
 func deleteSnapshotAndUndoReservation(
@@ -1665,6 +1695,12 @@ func (cs *cephfsControllerServer) ControllerModifyVolume(
 		if errors.Is(err, cerrors.ErrVolumeNotFound) || errors.Is(err, util.ErrKeyNotFound) ||
 			errors.Is(err, util.ErrPoolNotFound) {
 			return nil, status.Error(codes.NotFound, err.Error())
+		}
+
+		if errors.Is(err, cerrors.ErrInvalidVolID) {
+			// likely a static provisioned volume
+			// InvalidArgument indicates that the CO has specified capabilities not supported by the volume
+			return nil, status.Errorf(codes.InvalidArgument, "volume ID %s does not support modify", volID)
 		}
 
 		return nil, status.Error(codes.Internal, err.Error())
