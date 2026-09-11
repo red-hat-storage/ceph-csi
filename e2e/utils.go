@@ -90,7 +90,6 @@ var (
 	testNBD            bool
 	testNFS            bool
 	testNVMeoF         bool
-	helmTest           bool
 	upgradeTesting     bool
 	upgradeVersion     string
 	cephCSINamespace   string
@@ -136,7 +135,6 @@ type DriverInfo struct {
 	clientSet        kubernetes.Interface
 	deploymentName   string
 	daemonsetName    string
-	helmPodLabelName string
 	driverContainers []string
 }
 
@@ -149,7 +147,7 @@ func (d *DriverInfo) getDaemonsetName() string {
 }
 
 func (d *DriverInfo) getPodSelector() string {
-	return fmt.Sprintf("app in (%s, %s, %s)", d.helmPodLabelName, d.deploymentName, d.daemonsetName)
+	return fmt.Sprintf("app in (%s, %s)", d.deploymentName, d.daemonsetName)
 }
 
 func (d *DriverInfo) setClusterName(clusterName string) error {
@@ -2115,6 +2113,27 @@ func checkExports(f *framework.Framework, clusterID, clientString string) bool {
 	}
 
 	return true
+}
+
+// checkExportPseudoPath confirms an export with the given pseudo-path exists
+// for a cluster_id, for asserting on friendlyExportNames-derived paths.
+func checkExportPseudoPath(f *framework.Framework, clusterID, pseudoPath string) bool {
+	exportList, err := listExports(f, clusterID)
+	if err != nil {
+		framework.Logf("failed to fetch list of exports: %v", err)
+
+		return false
+	}
+
+	for i := range len(*exportList) {
+		if (*exportList)[i].Pseudo == pseudoPath {
+			return true
+		}
+	}
+
+	framework.Logf("Could not find an export with pseudo-path %q in the list of exports (%+v)", pseudoPath, exportList)
+
+	return false
 }
 
 // createSubvolumegroup creates a subvolumegroup.

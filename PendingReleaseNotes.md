@@ -2,6 +2,13 @@
 
 ## Breaking changes
 
+## Deprecations
+
+1. Helm chart deployments are no longer validated by the e2e test suite. Helm
+   charts will be deprecated in v3.18 in favor of the
+   [Ceph-CSI Operator](https://ceph.github.io/ceph-csi-operator) and to be
+   removed in v3.19
+
 ## Features
 
 1. Added `GetReplicationDestinationInfo` RPC to map source volume/volume
@@ -15,5 +22,18 @@
       configuration
     - Backward compatibility with existing cluster-mapping.json via
       ClientProfileMapping integration
+1. Added a `friendlyExportNames` StorageClass parameter for the NFS driver.
+   When set to `"true"` and the external-provisioner runs with
+   `--extra-create-metadata=true`, NFS-exports are named
+   `<namespace>/<pvc-name>` instead of the generated volume ID. Off by
+   default, and gated behind the parameter rather than the provisioner flag
+   alone, since CephFS already reads that same metadata unconditionally for
+   per-tenant KMS scoping.  Existing StorageClasses keep today's export
+   names unless they opt in explicitly. Unlike the generated volume ID,
+   `<namespace>/<pvc-name>` is not guaranteed unique over time (e.g. a PVC
+   recreated under the same name before its old export was cleaned up);
+   `CreateVolume` now fails with `AlreadyExists` rather than silently
+   reusing another volume's export if the name is already claimed by a
+   different subvolume.
 
 ## NOTE

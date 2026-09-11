@@ -56,8 +56,6 @@ var (
 	// FIXME: some tests change the subvolumegroup to "e2e".
 	defaultSubvolumegroup = "csi"
 
-	helmNFSPodsLabel = "ceph-csi-nfs"
-
 	operatorNFSDeploymentName = "nfs.csi.ceph.com-ctrlplugin"
 	operatorNFSDaemonsetName  = "nfs.csi.ceph.com-nodeplugin"
 
@@ -354,7 +352,7 @@ var _ = Describe("nfs", func() {
 	var c clientset.Interface
 	// deploy CephFS CSI
 	BeforeEach(func() {
-		if !testNFS || upgradeTesting || helmTest {
+		if !testNFS || upgradeTesting {
 			Skip("Skipping NFS E2E")
 		}
 		c = f.ClientSet
@@ -372,7 +370,6 @@ var _ = Describe("nfs", func() {
 					clientSet:        c,
 					deploymentName:   operatorNFSDeploymentName,
 					daemonsetName:    operatorNFSDaemonsetName,
-					helmPodLabelName: helmNFSPodsLabel,
 					driverContainers: []string{nfsContainerName},
 				},
 			}
@@ -430,8 +427,6 @@ var _ = Describe("nfs", func() {
 		}
 
 		if CurrentSpecReport().Failed() {
-			// log pods created by helm chart
-			logsCSIPods("app="+helmNFSPodsLabel, c)
 			// log provisioner
 			logsCSIPods("app="+nfsDeployment.getDeploymentName(), c)
 			// log node plugin
@@ -650,6 +645,34 @@ var _ = Describe("nfs", func() {
 
 			if !checkExports(f, "my-nfs", clientExample) {
 				logAndFail("failed in testing exports")
+			}
+
+			err = deletePVCAndValidatePV(f.ClientSet, pvc, deployTimeout)
+			if err != nil {
+				logAndFail("failed to delete PVC: %v", err)
+			}
+		})
+
+		It("create a storageclass with friendly export names and a PVC then bind it to an app", func() {
+			err := createNFSStorageClass(f.ClientSet, f, false, map[string]string{
+				"friendlyExportNames": "true",
+			})
+			if err != nil {
+				logAndFail("failed to create NFS storageclass: %v", err)
+			}
+			pvc, err := loadPVC(pvcPath)
+			if err != nil {
+				logAndFail("Could not create PVC: 1 %v", err)
+			}
+			pvc.Namespace = f.UniqueName
+			err = createPVCAndvalidatePV(f.ClientSet, pvc, deployTimeout)
+			if err != nil {
+				logAndFail("failed to create PVC: %v", err)
+			}
+
+			expectedPseudoPath := fmt.Sprintf("/%s/%s", pvc.Namespace, pvc.Name)
+			if !checkExportPseudoPath(f, "my-nfs", expectedPseudoPath) {
+				logAndFail("failed to find export with friendly pseudo-path %q", expectedPseudoPath)
 			}
 
 			err = deletePVCAndValidatePV(f.ClientSet, pvc, deployTimeout)
