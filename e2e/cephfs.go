@@ -51,7 +51,6 @@ var (
 	fileSystemName        = "myfs"
 	fileSystemPoolName    = "myfs-replicated"
 	metadataPool          = "" // will be set in BeforeAll
-	cephFSDeleted         = false
 
 	operatorCephFSDeploymentName = "cephfs.csi.ceph.com-ctrlplugin"
 	operatorCephFSDaemonsetName  = "cephfs.csi.ceph.com-nodeplugin"
@@ -202,7 +201,6 @@ var _ = Describe(cephfsType, func() {
 		if !testCephFS || upgradeTesting {
 			Skip("Skipping CephFS E2E")
 		}
-		cephFSDeleted = false
 		c = f.ClientSet
 		cephFSDeployment = NewCephFSDeployment(c)
 		if operatorDeployment {
@@ -310,11 +308,9 @@ var _ = Describe(cephfsType, func() {
 			deleteVault()
 		}
 
-		if !cephFSDeleted {
-			err = deleteSubvolumegroup(f, fileSystemName, subvolumegroup)
-			if err != nil {
-				logAndFail("failed to delete subvolumegroup %s: %v", subvolumegroup, err)
-			}
+		err = deleteSubvolumegroup(f, fileSystemName, subvolumegroup)
+		if err != nil {
+			logAndFail("failed to delete subvolumegroup %s: %v", subvolumegroup, err)
 		}
 
 		if deployCephFS {
@@ -3066,35 +3062,31 @@ var _ = Describe(cephfsType, func() {
 			validateSubvolumeCount(f, 0, fileSystemName, subvolumegroup)
 		})
 
-		// This must remain the last test because it deletes the CephFS filesystem
-		// and its backing pools.
+		// Make sure this should be last testcase in
+		// this file, because it deletes pool
 		It("Create a PVC and delete PVC when backend pool deleted", func() {
+			// FIXME: in case NFS testing is done, prevent deletion
+			// of the CephFS filesystem and related pool. This can
+			// probably be addressed in a nicer way, making sure
+			// everything is tested, always.
 			if testNFS {
 				framework.Logf("skipping CephFS destructive tests, allow NFS to run")
 
 				return
 			}
-			err := createCephfsStorageClass(f.ClientSet, f, true, nil)
-			if err != nil {
-				logAndFail("failed to create CephFS storageclass: %v", err)
-			}
-			defer func() {
-				err = deleteResource(cephFSExamplePath + "storageclass.yaml")
-				if err != nil {
-					logAndFail("failed to delete CephFS storageclass: %v", err)
-				}
-			}()
-
-			err = pvcDeleteWhenPoolNotFound(pvcPath, true, f)
+			err := pvcDeleteWhenPoolNotFound(pvcPath, true, f)
 			if err != nil {
 				logAndFail("failed to delete PVC: %v", err)
 			}
-			cephFSDeleted = true
 		})
 
 		It("delete ceph users", func() {
+			// FIXME: in case NFS testing is done, prevent deletion
+			// of the CephFS filesystem and related pool. This can
+			// probably be addressed in a nicer way, making sure
+			// everything is tested, always.
 			if testNFS {
-				framework.Logf("skipping CephFS user deletion while NFS testing is enabled")
+				framework.Logf("skipping CephFS destructive tests, allow NFS to run")
 
 				return
 			}
