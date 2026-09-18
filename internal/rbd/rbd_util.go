@@ -160,6 +160,9 @@ type rbdImage struct {
 	EnableMetadata bool
 	// ParentInTrash indicates the parent image is in trash.
 	ParentInTrash bool
+	// ParentImageID is the image ID of the parent image, populated by
+	// getImageInfo(). Valid even when the parent is in trash.
+	ParentImageID string
 
 	// RBD QoS configuration
 	QosParameters map[string]string
@@ -540,7 +543,7 @@ func (ri *rbdImage) getImageID() error {
 // For an image with an erasure-coded data pool, this returns the EC poolID.
 // For an image without a separate data pool, this returns the regular poolID.
 func (ri *rbdImage) getDataPoolID() (int64, error) {
-	image, err := ri.open()
+	image, err := ri.openReadOnly()
 	if err != nil {
 		return util.InvalidPoolID, err
 	}
@@ -609,6 +612,27 @@ func (ri *rbdImage) openReadOnly() (*librbd.Image, error) {
 	}
 
 	image, err := librbd.OpenImageReadOnly(ri.ioctx, ri.RbdImageName, librbd.NoSnapshot)
+	if err != nil {
+		if errors.Is(err, librbd.ErrNotFound) {
+			err = fmt.Errorf("Failed as %w (internal %w)", rbderrors.ErrImageNotFound, err)
+		}
+
+		return nil, err
+	}
+
+	return image, nil
+}
+
+// openReadOnlyByID opens the rbdImage by image ID in read-only mode. This is
+// useful when the image name no longer identifies the image, for example after
+// a parent image has moved to trash.
+func (ri *rbdImage) openReadOnlyByID() (*librbd.Image, error) {
+	err := ri.openIoctx()
+	if err != nil {
+		return nil, err
+	}
+
+	image, err := librbd.OpenImageByIdReadOnly(ri.ioctx, ri.ImageID, librbd.NoSnapshot)
 	if err != nil {
 		if errors.Is(err, librbd.ErrNotFound) {
 			err = fmt.Errorf("Failed as %w (internal %w)", rbderrors.ErrImageNotFound, err)
@@ -824,6 +848,7 @@ func (ri *rbdImage) trashRemoveImage(ctx context.Context) error {
 // DeleteTempImage deletes the temporary image created for volume datasource.
 func (rv *rbdVolume) DeleteTempImage(ctx context.Context) error {
 	tempClone := rv.generateTempClone()
+	defer tempClone.Destroy(ctx)
 	snap := &rbdSnapshot{}
 	defer snap.Destroy(ctx)
 
@@ -860,6 +885,7 @@ func (ri *rbdImage) getCloneDepth(ctx context.Context) (uint, error) {
 	vol.RbdImageName = ri.RbdImageName
 	vol.RadosNamespace = ri.RadosNamespace
 	vol.conn = ri.conn.Copy()
+	defer vol.Destroy(ctx)
 
 	for {
 		if vol.RbdImageName == "" {
@@ -1002,7 +1028,7 @@ func (ri *rbdImage) flattenRbdImage(
 }
 
 func (ri *rbdImage) getParentName() (string, error) {
-	rbdImage, err := ri.open()
+	rbdImage, err := ri.openReadOnly()
 	if err != nil {
 		return "", err
 	}
@@ -1042,6 +1068,74 @@ func (ri *rbdImage) hasFeature(feature uint64) bool {
 	return (uint64(ri.ImageFeatureSet) & feature) == feature
 }
 
+// allImageInChainHasFeature returns true only if every image in the clone chain
+// (starting from ri and walking up through parents) has the given feature
+// enabled. This is useful for operations like DiffIterate that traverse the
+// full parent chain and require a feature (fast-diff, exclusive-lock, object-map) on all ancestors.
+func (ri *rbdImage) allImageInChainHasFeature(ctx context.Context, feature uint64) (bool, error) {
+	rbdImg := rbdImage{}
+
+	rbdImg.Pool = ri.Pool
+	rbdImg.RadosNamespace = ri.RadosNamespace
+	rbdImg.Monitors = ri.Monitors
+	rbdImg.RbdImageName = ri.RbdImageName
+	rbdImg.conn = ri.conn.Copy()
+	defer rbdImg.Destroy(ctx)
+
+	for {
+		if rbdImg.RbdImageName == "" {
+			return true, nil
+		}
+
+		hasFeature := false
+		err := func() error {
+			if err := rbdImg.openIoctx(); err != nil {
+				return err
+			}
+			defer func() {
+				rbdImg.ioctx.Destroy()
+				rbdImg.ioctx = nil
+			}()
+
+			var img *librbd.Image
+			var err error
+			if rbdImg.ImageID != "" {
+				img, err = rbdImg.openReadOnlyByID()
+			} else {
+				img, err = rbdImg.openReadOnly()
+			}
+			if err != nil {
+				return err
+			}
+			defer img.Close() //nolint:errcheck // not a critical failure
+
+			err = rbdImg.setImageInfo(img)
+			if err != nil && !errors.Is(err, librbd.ErrNotFound) {
+				return err
+			}
+
+			hasFeature = rbdImg.hasFeature(feature)
+
+			return nil
+		}()
+		if err != nil {
+			log.ErrorLog(ctx, "failed to check feature on image %s: %s", rbdImg.String(), err)
+
+			return false, err
+		}
+
+		if !hasFeature {
+			log.DebugLog(ctx, "image %s in chain lacks feature %d", rbdImg.String(), feature)
+
+			return false, nil
+		}
+
+		rbdImg.ImageID = rbdImg.ParentImageID
+		rbdImg.RbdImageName = rbdImg.ParentName
+		rbdImg.Pool = rbdImg.ParentPool
+	}
+}
+
 func (ri *rbdImage) checkImageChainHasFeature(ctx context.Context, feature uint64) (bool, error) {
 	rbdImg := rbdImage{}
 
@@ -1050,6 +1144,7 @@ func (ri *rbdImage) checkImageChainHasFeature(ctx context.Context, feature uint6
 	rbdImg.Monitors = ri.Monitors
 	rbdImg.RbdImageName = ri.RbdImageName
 	rbdImg.conn = ri.conn.Copy()
+	defer rbdImg.Destroy(ctx)
 
 	for {
 		if rbdImg.RbdImageName == "" {
@@ -1780,11 +1875,21 @@ func (ri *rbdImage) GetCreationTime(ctx context.Context) (*time.Time, error) {
 // getImageInfo queries rbd about the given image and returns its metadata, and returns
 // ErrImageNotFound if provided image is not found.
 func (ri *rbdImage) getImageInfo() error {
-	image, err := ri.open()
+	image, err := ri.openReadOnly()
 	if err != nil {
 		return err
 	}
 	defer image.Close() //nolint:errcheck // not a critical failure
+
+	return ri.setImageInfo(image)
+}
+
+// setImageInfo updates rbdImage metadata from an already opened RBD image.
+// The caller must pass a non-nil image and remains responsible for closing it.
+func (ri *rbdImage) setImageInfo(image *librbd.Image) error {
+	if image == nil {
+		return errors.New("failed to set image info: image is nil")
+	}
 
 	imageInfo, err := image.Stat()
 	if err != nil {
@@ -1806,6 +1911,9 @@ func (ri *rbdImage) getImageInfo() error {
 		// the parent is an error or not.
 		if errors.Is(err, librbd.ErrNotFound) {
 			ri.ParentName = ""
+			ri.ParentPool = ""
+			ri.ParentInTrash = false
+			ri.ParentImageID = ""
 		} else {
 			return err
 		}
@@ -1813,6 +1921,7 @@ func (ri *rbdImage) getImageInfo() error {
 		ri.ParentName = parentInfo.Image.ImageName
 		ri.ParentPool = parentInfo.Image.PoolName
 		ri.ParentInTrash = parentInfo.Image.Trash
+		ri.ParentImageID = parentInfo.Image.ImageID
 	}
 	// Get image creation time
 	tm, err := image.GetCreateTimestamp()
@@ -1848,6 +1957,9 @@ func (ri *rbdImage) getParent() (*rbdImage, error) {
 
 	err = parentImage.getImageInfo()
 	if err != nil {
+		parentImage.conn.Destroy()
+		parentImage.conn = nil
+
 		return nil, err
 	}
 
@@ -1876,7 +1988,7 @@ ErrImageNotFound if provided image is not found, and ErrSnapNotFound if
 provided snap is not found in the images snapshot list.
 */
 func (ri *rbdImage) checkSnapExists(rbdSnap *rbdSnapshot) error {
-	image, err := ri.open()
+	image, err := ri.openReadOnly()
 	if err != nil {
 		return err
 	}
@@ -2063,6 +2175,13 @@ func (ri *rbdImage) GetMetadata(key string) (string, error) {
 }
 
 func (ri *rbdImage) SetMetadata(key, value string) error {
+	existingVal, err := ri.GetMetadata(key)
+	if err != nil && !errors.Is(err, librbd.ErrNotFound) {
+		return err
+	}
+	if err == nil && existingVal == value {
+		return nil
+	}
 	image, err := ri.open()
 	if err != nil {
 		return err
@@ -2174,7 +2293,7 @@ type snapAndChildrenInfo struct {
 // listSnapAndChildren returns list of snapshot names, volume snapshot images and
 // child temp clone images. Only child images which are not in trash are returned.
 func (ri *rbdImage) listSnapAndChildren() (*snapAndChildrenInfo, error) {
-	image, err := ri.open()
+	image, err := ri.openReadOnly()
 	if err != nil {
 		return nil, err
 	}

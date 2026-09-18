@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -455,6 +456,129 @@ func getMetricsForPVC(f *framework.Framework, pvc *v1.PersistentVolumeClaim, t i
 
 		return false, nil
 	})
+}
+
+// getVolumeStatsMetrics scrapes kubelet metrics and returns the parsed
+// kubelet_volume_stats_* metrics for the given PVC once they appear.
+func getVolumeStatsMetrics(
+	f *framework.Framework,
+	pvc *v1.PersistentVolumeClaim,
+	t int,
+) (map[string]float64, error) {
+	kubelet, err := getKubeletIP(f.ClientSet)
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := fmt.Sprintf("curl --silent 'http://%s:10255/metrics'", kubelet)
+	timeout := time.Duration(t) * time.Minute
+
+	var result map[string]float64
+	err = wait.PollUntilContextTimeout(context.TODO(), poll, timeout, true, func(_ context.Context) (bool, error) {
+		stdOut, stdErr, err := execCommandInToolBoxPod(f, cmd, rookNamespace)
+		if err != nil {
+			framework.Logf("failed to get metrics for pvc %q (%v): %v", pvc.Name, err, stdErr)
+
+			return false, nil
+		}
+		if stdOut == "" {
+			return false, nil
+		}
+
+		metrics := parseVolumeStatsMetrics(stdOut, pvc.Namespace, pvc.Name)
+		if len(metrics) == 0 {
+			return false, nil
+		}
+
+		result = metrics
+
+		return true, nil
+	})
+
+	return result, err
+}
+
+// parseVolumeStatsMetrics extracts kubelet_volume_stats_* metric values for a
+// specific PVC from the kubelet metrics output.
+func parseVolumeStatsMetrics(metricsOutput, namespace, pvcName string) map[string]float64 {
+	metrics := make(map[string]float64)
+	nsFilter := fmt.Sprintf("namespace=%q", namespace)
+	nameFilter := fmt.Sprintf("persistentvolumeclaim=%q", pvcName)
+
+	for _, line := range strings.Split(metricsOutput, "\n") {
+		if !strings.HasPrefix(line, "kubelet_volume_stats_") {
+			continue
+		}
+		if !strings.Contains(line, nsFilter) || !strings.Contains(line, nameFilter) {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+
+		metricName := parts[0]
+		if idx := strings.Index(metricName, "{"); idx != -1 {
+			metricName = metricName[:idx]
+		}
+
+		value, err := strconv.ParseFloat(parts[len(parts)-1], 64)
+		if err != nil {
+			continue
+		}
+
+		metrics[metricName] = value
+	}
+
+	return metrics
+}
+
+// validateVolumeStatsMetrics checks that the collected metrics are consistent.
+// For filesystem volumes: capacity > 0, used >= 0, used <= capacity.
+// For block volumes: capacity > 0 is required; used and available may not be
+// present when secrets are unavailable for DiffIterate.
+func validateVolumeStatsMetrics(metrics map[string]float64, isBlock bool) (bool, error) {
+	capacity, hasCapacity := metrics["kubelet_volume_stats_capacity_bytes"]
+	if !hasCapacity {
+		return false, fmt.Errorf("missing kubelet_volume_stats_capacity_bytes metric")
+	}
+
+	if capacity <= 0 {
+		return false, fmt.Errorf("capacity_bytes must be > 0, got %f", capacity)
+	}
+
+	used, hasUsed := metrics["kubelet_volume_stats_used_bytes"]
+	available, hasAvailable := metrics["kubelet_volume_stats_available_bytes"]
+
+	if !isBlock {
+		if !hasUsed {
+			return false, fmt.Errorf("missing kubelet_volume_stats_used_bytes for filesystem volume")
+		}
+		if !hasAvailable {
+			return false, fmt.Errorf("missing kubelet_volume_stats_available_bytes for filesystem volume")
+		}
+		if used < 0 {
+			return false, fmt.Errorf("used_bytes must be >= 0, got %f", used)
+		}
+		if used > capacity {
+			return false, fmt.Errorf("used_bytes (%f) > capacity_bytes (%f)", used, capacity)
+		}
+
+		inodes, hasInodes := metrics["kubelet_volume_stats_inodes"]
+		if !hasInodes {
+			return false, fmt.Errorf("missing kubelet_volume_stats_inodes for filesystem volume")
+		}
+		if inodes < 0 {
+			return false, fmt.Errorf("inodes must be >= 0, got %f", inodes)
+		}
+	}
+
+	if hasUsed && hasAvailable && used+available > capacity {
+		return false, fmt.Errorf("used (%f) + available (%f) > capacity (%f)", used, available, capacity)
+	}
+
+	return true, nil
 }
 
 func waitForPVToBeDeleted(c kubernetes.Interface, pvName string, t int) error {
