@@ -8,9 +8,12 @@ FROM ${BASE_IMAGE} as updated_base
 # https://github.com/ceph/ceph-container/issues/2034
 # https://github.com/ceph/ceph-container/issues/2141 are fixed.
 RUN true \
-    && (. /etc/os-release ; if [ "$ID" = centos -a "$VERSION" = 8 ]; then find /etc/yum.repos.d/ -name '*.repo' -exec sed -i -e 's|^mirrorlist=|#mirrorlist=|g' -e 's|^#baseurl=http://mirror.centos.org|baseurl=https://vault.centos.org|g'  {} \; ; fi ) \
-    && if [ ! -f /etc/yum.repos.d/ceph.repo -a "$CEPH_IS_DEVEL" = true ]; then if [ -z "$CEPH_SHA1" ]; then CEPH_SHA1="$(sed -n 's/.*CEPH_GIT_VER *= *"\(.*\)".*/\1/p' /usr/bin/ceph)"; fi ; yum reinstall -y "$(curl -fs "https://shaman.ceph.com/api/search/?project=ceph&distros=centos/9/x86_64&flavor=default&ref=${CEPH_REF}&sha1=${CEPH_SHA1:-latest}" | jq -r .[0].url)/noarch/ceph-release-1-0.el9.noarch.rpm"; fi \
-    && if [ ! -f /etc/yum.repos.d/ceph.repo -a "$CEPH_IS_DEVEL" != true ]; then yum reinstall -y "https://download.ceph.com/rpm-${CEPH_REF}/el9/noarch/ceph-release-1-1.el9.noarch.rpm"; fi \
+     && . /etc/os-release \
+     && OS_NAME="$ID" \
+     && OS_VERSION="$(echo $VERSION_ID | cut -d. -f1)" \
+     && (if [ "$OS_NAME" = centos -a "$OS_VERSION" = 8 ]; then find /etc/yum.repos.d/ -name '*.repo' -exec sed -i -e 's|^mirrorlist=|#mirrorlist=|g' -e 's|^#baseurl=http://mirror.centos.org|baseurl=https://vault.centos.org|g'  {} \; ; fi ) \
+     && if [ ! -f /etc/yum.repos.d/ceph.repo -a "$CEPH_IS_DEVEL" = true ]; then if [ -z "$CEPH_SHA1" ]; then CEPH_SHA1="$(sed -n 's/.*CEPH_GIT_VER *= *"\(.*\)".*/\1/p' /usr/bin/ceph)"; fi ; yum reinstall -y "$(curl -fs "https://shaman.ceph.com/api/search/?project=ceph&distros=${OS_NAME}/${OS_VERSION}/$(uname -m)&flavor=default&ref=${CEPH_REF}&sha1=${CEPH_SHA1:-latest}" | jq -r .[0].url)/noarch/ceph-release-1-0.el${OS_VERSION}.noarch.rpm"; fi \
+     && if [ ! -f /etc/yum.repos.d/ceph.repo -a "$CEPH_IS_DEVEL" != true ]; then yum reinstall -y "https://download.ceph.com/rpm-${CEPH_REF}/el${OS_VERSION}/noarch/ceph-release-1-1.el${OS_VERSION}.noarch.rpm"; fi \
      && ( dnf config-manager --disable tcmu-runner,tcmu-runner-source,tcmu-runner-noarch,ceph-iscsi,ganesha || true ) \
      && true
 
@@ -43,7 +46,7 @@ RUN source /build.env && \
 RUN ${GOROOT}/bin/go version && ${GOROOT}/bin/go env
 
 # other/conflicting versions of protobuf get installed as dependency
-RUN dnf -y remove protobuf
+RUN dnf -y --setopt=tsflags=noscripts remove protobuf
 
 RUN dnf -y install --nodocs \
 	librados-devel librbd-devel libcephfs-devel \
