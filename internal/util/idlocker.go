@@ -29,6 +29,9 @@ const (
 	// SnapshotOperationAlreadyExistsFmt string format to return for concurrent operation.
 	SnapshotOperationAlreadyExistsFmt = "an operation with the given Snapshot ID %s already exists"
 
+	// GroupOperationAlreadyExistsFmt string format to return for concurrent operation.
+	GroupOperationAlreadyExistsFmt = "an operation with the given Group ID %s already exists"
+
 	// TargetPathOperationAlreadyExistsFmt string format to return for concurrent operation on target path.
 	TargetPathOperationAlreadyExistsFmt = "an operation with the given target path %s already exists"
 
