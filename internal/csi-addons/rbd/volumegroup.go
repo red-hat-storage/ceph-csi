@@ -56,9 +56,10 @@ type VolumeGroupServer struct {
 
 // NewVolumeGroupServer creates a new VolumeGroupServer which handles the
 // VolumeGroup Service requests from the CSI-Addons specification.
-func NewVolumeGroupServer(instanceID string) *VolumeGroupServer {
+func NewVolumeGroupServer(instanceID string, c *corerbd.ControllerServer) *VolumeGroupServer {
 	return &VolumeGroupServer{
-		driverInstance: instanceID,
+		ControllerServer: c,
+		driverInstance:   instanceID,
 	}
 }
 
