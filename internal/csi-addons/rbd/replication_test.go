@@ -785,3 +785,122 @@ func Test_getCurrentReplicationStatus(t *testing.T) {
 		})
 	}
 }
+
+func Test_acquireReplicationLock(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+
+	tests := []struct {
+		name        string
+		reqID       string
+		repSource   *replication.ReplicationSource
+		preLock     bool // whether to acquire lock before test
+		errExpected bool
+	}{
+		{
+			name:  "success: acquire volume lock",
+			reqID: "0001-0009-rook-ceph-0000000000000002-ff34df1b-1874-475e-8fa8-f5cd39eff447",
+			repSource: &replication.ReplicationSource{
+				Type: &replication.ReplicationSource_Volume{
+					Volume: &replication.ReplicationSource_VolumeSource{
+						VolumeId: "0001-0009-rook-ceph-0000000000000002-ff34df1b-1874-475e-8fa8-f5cd39eff447",
+					},
+				},
+			},
+			preLock:     false,
+			errExpected: false,
+		},
+		{
+			name:  "failure: volume lock already held",
+			reqID: "0001-0009-rook-ceph-0000000000000002-ff34df1b-1874-475e-8fa8-f5cd39eff448",
+			repSource: &replication.ReplicationSource{
+				Type: &replication.ReplicationSource_Volume{
+					Volume: &replication.ReplicationSource_VolumeSource{
+						VolumeId: "0001-0009-rook-ceph-0000000000000002-ff34df1b-1874-475e-8fa8-f5cd39eff448",
+					},
+				},
+			},
+			preLock:     true,
+			errExpected: true,
+		},
+		{
+			name:  "success: acquire volume group lock",
+			reqID: "0001-0009-rook-ceph-0000000000000002-e84110c1-8aec-4f91-af93-b488606c7bd6",
+			repSource: &replication.ReplicationSource{
+				Type: &replication.ReplicationSource_Volumegroup{
+					Volumegroup: &replication.ReplicationSource_VolumeGroupSource{
+						VolumeGroupId: "0001-0009-rook-ceph-0000000000000002-e84110c1-8aec-4f91-af93-b488606c7bd6",
+					},
+				},
+			},
+			preLock:     false,
+			errExpected: false,
+		},
+		{
+			name:  "failure: volume group lock already held",
+			reqID: "0001-0009-rook-ceph-0000000000000002-e84110c1-8aec-4f91-af93-b488606c7bd7",
+			repSource: &replication.ReplicationSource{
+				Type: &replication.ReplicationSource_Volumegroup{
+					Volumegroup: &replication.ReplicationSource_VolumeGroupSource{
+						VolumeGroupId: "0001-0009-rook-ceph-0000000000000002-e84110c1-8aec-4f91-af93-b488606c7bd7",
+					},
+				},
+			},
+			preLock:     true,
+			errExpected: true,
+		},
+		{
+			name:        "success: nil repSource uses volume lock",
+			reqID:       "0001-0009-rook-ceph-0000000000000002-ff34df1b-1874-475e-8fa8-f5cd39eff449",
+			repSource:   nil,
+			preLock:     false,
+			errExpected: false,
+		},
+		{
+			name:  "failure: invalid repSource type",
+			reqID: "0001-0009-rook-ceph-0000000000000002-ff34df1b-1874-475e-8fa8-f5cd39eff450",
+			repSource: &replication.ReplicationSource{
+				Type: nil, // neither Volume nor Volumegroup
+			},
+			preLock:     false,
+			errExpected: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// Create fresh ReplicationServer for each test case
+			rs := &ReplicationServer{
+				ControllerServer: &corerbd.ControllerServer{
+					VolumeLocks:      util.NewIDLocker(),
+					VolumeGroupLocks: util.NewIDLocker(),
+				},
+				driverInstance: "test-driver",
+			}
+
+			// Pre-acquire lock if needed for failure test cases
+			if tt.preLock {
+				preLock, err := rs.acquireReplicationLock(ctx, tt.reqID, tt.repSource)
+				if err != nil {
+					t.Fatalf("failed to pre-acquire lock: %v", err)
+				}
+				defer preLock()
+			}
+
+			// Attempt to acquire lock
+			releaseLock, err := rs.acquireReplicationLock(ctx, tt.reqID, tt.repSource)
+			if tt.errExpected {
+				if err == nil {
+					t.Errorf("acquireReplicationLock() expected error but got none")
+				}
+			} else {
+				if err != nil {
+					t.Errorf("acquireReplicationLock() returned unexpected error = %v", err)
+				}
+				if releaseLock != nil {
+					defer releaseLock()
+				}
+			}
+		})
+	}
+}
