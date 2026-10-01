@@ -1021,7 +1021,14 @@ func (cs *ControllerServer) checkErrAndUndoReserve(
 	}
 
 	if errors.Is(err, rbderrors.ErrImageNotFound) {
-		if notFoundErr := rbdVol.removeImageFromTrash(ctx); notFoundErr != nil {
+		// The image is already gone from the pool. Removing it from trash
+		// requires its ID, which is only recorded in the journal; without it
+		// there is nothing actionable left to do and retrying can never
+		// recover the ID, so treat the volume as deleted instead of failing
+		// the request forever.
+		if rbdVol.ImageID == "" {
+			log.WarningLog(ctx, "image %q not found and no image ID recorded, assuming it is already deleted", rbdVol)
+		} else if notFoundErr := rbdVol.removeImageFromTrash(ctx); notFoundErr != nil {
 			return nil, status.Errorf(codes.Internal, "failed to cleanup image %q: %v", rbdVol, notFoundErr)
 		}
 	} else {
@@ -1032,6 +1039,11 @@ func (cs *ControllerServer) checkErrAndUndoReserve(
 	// If error is ErrImageNotFound then we failed to find the image, but found the imageOMap
 	// to lead us to the image, hence the imageOMap needs to be garbage collected, by calling
 	// unreserve for the same
+	if rbdVol.RequestName == "" {
+		// nothing was read from the journal, so there is no reservation to undo
+		return &csi.DeleteVolumeResponse{}, nil
+	}
+
 	if acquired := cs.VolumeLocks.TryAcquire(rbdVol.RequestName); !acquired {
 		log.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, rbdVol.RequestName)
 
@@ -1910,6 +1922,13 @@ func (cs *ControllerServer) ControllerUnpublishVolume(
 		if errors.Is(err, rbderrors.ErrInvalidVolID) {
 			return nil, status.Errorf(codes.InvalidArgument, "volume ID %s does not support unpublish: %v",
 				volumeId, err)
+		}
+		if errors.Is(err, rbderrors.ErrImageNotFound) ||
+			errors.Is(err, util.ErrKeyNotFound) ||
+			errors.Is(err, util.ErrPoolNotFound) {
+			log.WarningLog(ctx, "volume %s no longer exists, skipping unpublish: %v", volumeId, err)
+
+			return &csi.ControllerUnpublishVolumeResponse{}, nil
 		}
 
 		return nil, status.Errorf(codes.Internal, "failed to generate volume from volume ID %s: %v",
