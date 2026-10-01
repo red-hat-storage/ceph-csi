@@ -48,7 +48,7 @@ func NewCephFSOperatorDeployment(c clientset.Interface) CephFSDeploymentMethod {
 			clientSet:        c,
 			deploymentName:   operatorCephFSDeploymentName,
 			daemonsetName:    operatorCephFSDaemonsetName,
-			driverContainers: []string{cephFSContainerName},
+			driverContainers: cephFSContainersName,
 		},
 	}
 }
