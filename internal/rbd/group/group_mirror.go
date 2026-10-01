@@ -346,7 +346,7 @@ func (status *siteMirrorGroupStatus) GetLastSyncInfo(ctx context.Context) (types
 type syncInfo struct {
 	LocalSnapshotTime    int64       `json:"local_snapshot_timestamp"`
 	LastSnapshotBytes    int64       `json:"last_snapshot_bytes"`
-	LastSnapshotDuration *int64      `json:"last_snapshot_sync_seconds"`
+	LastSnapshotDuration *int64      `json:"last_snapshot_complete_seconds"`
 	ReplayState          replayState `json:"replay_state"`
 }
 
