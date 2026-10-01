@@ -245,10 +245,10 @@ func (r *rbdDriver) setupCSIAddonsServer(conf *util.Config) error {
 		rs := casrbd.NewReclaimSpaceControllerServer(conf.InstanceID, r.cs.VolumeLocks)
 		r.cas.RegisterService(rs)
 
-		rcs := casrbd.NewReplicationServer(conf.InstanceID, NewControllerServer(r.cd))
+		rcs := casrbd.NewReplicationServer(conf.InstanceID, r.cs)
 		r.cas.RegisterService(rcs)
 
-		vgcs := casrbd.NewVolumeGroupServer(conf.InstanceID)
+		vgcs := casrbd.NewVolumeGroupServer(conf.InstanceID, r.cs)
 		r.cas.RegisterService(vgcs)
 	}
 	if conf.IsNodeServer {

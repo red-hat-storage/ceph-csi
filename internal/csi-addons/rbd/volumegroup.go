@@ -31,8 +31,10 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/ceph/ceph-csi/internal/rbd"
+	corerbd "github.com/ceph/ceph-csi/internal/rbd"
 	rbderrors "github.com/ceph/ceph-csi/internal/rbd/errors"
 	"github.com/ceph/ceph-csi/internal/rbd/types"
+	"github.com/ceph/ceph-csi/internal/util"
 	"github.com/ceph/ceph-csi/internal/util/log"
 )
 
@@ -44,15 +46,19 @@ type VolumeGroupServer struct {
 	// don't need to add all RPC methods leading to forward compatibility.
 	*volumegroup.UnimplementedControllerServer
 
+	// Embed ControllerServer as it implements helper functions
+	*corerbd.ControllerServer
+
 	// driverInstance is the unique ID for this CSI-driver deployment.
 	driverInstance string
 }
 
 // NewVolumeGroupServer creates a new VolumeGroupServer which handles the
 // VolumeGroup Service requests from the CSI-Addons specification.
-func NewVolumeGroupServer(instanceID string) *VolumeGroupServer {
+func NewVolumeGroupServer(instanceID string, c *corerbd.ControllerServer) *VolumeGroupServer {
 	return &VolumeGroupServer{
-		driverInstance: instanceID,
+		ControllerServer: c,
+		driverInstance:   instanceID,
 	}
 }
 
@@ -98,6 +104,14 @@ func (vs *VolumeGroupServer) CreateVolumeGroup(
 		vg        types.VolumeGroup
 		groupName = req.GetName()
 	)
+
+	// Existence and conflict checks
+	if acquired := vs.VolumeGroupLocks.TryAcquire(groupName); !acquired {
+		log.ErrorLog(ctx, util.GroupOperationAlreadyExistsFmt, groupName)
+
+		return nil, status.Errorf(codes.Aborted, util.GroupOperationAlreadyExistsFmt, groupName)
+	}
+	defer vs.VolumeGroupLocks.Release(groupName)
 
 	mgr := rbd.NewManager(vs.driverInstance, req.GetParameters(), req.GetSecrets())
 	defer mgr.Destroy(ctx)
@@ -277,14 +291,24 @@ func (vs *VolumeGroupServer) DeleteVolumeGroup(
 	ctx context.Context,
 	req *volumegroup.DeleteVolumeGroupRequest,
 ) (*volumegroup.DeleteVolumeGroupResponse, error) {
+	groupID := req.GetVolumeGroupId()
+
+	// Existence and conflict checks
+	if acquired := vs.VolumeGroupLocks.TryAcquire(groupID); !acquired {
+		log.ErrorLog(ctx, util.GroupOperationAlreadyExistsFmt, groupID)
+
+		return nil, status.Errorf(codes.Aborted, util.GroupOperationAlreadyExistsFmt, groupID)
+	}
+	defer vs.VolumeGroupLocks.Release(groupID)
+
 	mgr := rbd.NewManager(vs.driverInstance, nil, req.GetSecrets())
 	defer mgr.Destroy(ctx)
 
 	// resolve the volume group
-	vg, err := mgr.GetVolumeGroupByID(ctx, req.GetVolumeGroupId())
+	vg, err := mgr.GetVolumeGroupByID(ctx, groupID)
 	if err != nil {
 		if errors.Is(err, rbderrors.ErrGroupNotFound) {
-			log.ErrorLog(ctx, "VolumeGroup %q doesn't exists", req.GetVolumeGroupId())
+			log.ErrorLog(ctx, "VolumeGroup %q doesn't exists", groupID)
 
 			return &volumegroup.DeleteVolumeGroupResponse{}, nil
 		}
@@ -292,17 +316,17 @@ func (vs *VolumeGroupServer) DeleteVolumeGroup(
 		return nil, status.Errorf(
 			codes.Internal,
 			"could not fetch volume group %q: %s",
-			req.GetVolumeGroupId(),
+			groupID,
 			err.Error())
 	}
 	defer vg.Destroy(ctx)
 
-	log.DebugLog(ctx, "VolumeGroup %q has been found", req.GetVolumeGroupId())
+	log.DebugLog(ctx, "VolumeGroup %q has been found", groupID)
 
-	volumes, mirror, err := mgr.GetMirrorSource(ctx, req.GetVolumeGroupId(), &replication.ReplicationSource{
+	volumes, mirror, err := mgr.GetMirrorSource(ctx, groupID, &replication.ReplicationSource{
 		Type: &replication.ReplicationSource_Volumegroup{
 			Volumegroup: &replication.ReplicationSource_VolumeGroupSource{
-				VolumeGroupId: req.GetVolumeGroupId(),
+				VolumeGroupId: groupID,
 			},
 		},
 	})
@@ -321,12 +345,12 @@ func (vs *VolumeGroupServer) DeleteVolumeGroup(
 
 	// verify that the volume group is empty, if the group is primary
 	if vgrMirrorInfo.IsPrimary() {
-		log.DebugLog(ctx, "VolumeGroup %q contains %d volumes", req.GetVolumeGroupId(), len(volumes))
+		log.DebugLog(ctx, "VolumeGroup %q contains %d volumes", groupID, len(volumes))
 		if len(volumes) != 0 {
 			return nil, status.Errorf(
 				codes.FailedPrecondition,
 				"rejecting to delete non-empty volume group %q",
-				req.GetVolumeGroupId())
+				groupID)
 		}
 	}
 
@@ -335,11 +359,11 @@ func (vs *VolumeGroupServer) DeleteVolumeGroup(
 	if err != nil {
 		return nil, status.Errorf(codes.Internal,
 			"failed to delete volume group %q: %s",
-			req.GetVolumeGroupId(),
+			groupID,
 			err.Error())
 	}
 
-	log.DebugLog(ctx, "VolumeGroup %q has been deleted", req.GetVolumeGroupId())
+	log.DebugLog(ctx, "VolumeGroup %q has been deleted", groupID)
 
 	return &volumegroup.DeleteVolumeGroupResponse{}, nil
 }
@@ -388,34 +412,44 @@ func (vs *VolumeGroupServer) ModifyVolumeGroupMembership(
 	ctx context.Context,
 	req *volumegroup.ModifyVolumeGroupMembershipRequest,
 ) (*volumegroup.ModifyVolumeGroupMembershipResponse, error) {
+	groupID := req.GetVolumeGroupId()
+
+	// Existence and conflict checks
+	if acquired := vs.VolumeGroupLocks.TryAcquire(groupID); !acquired {
+		log.ErrorLog(ctx, util.GroupOperationAlreadyExistsFmt, groupID)
+
+		return nil, status.Errorf(codes.Aborted, util.GroupOperationAlreadyExistsFmt, groupID)
+	}
+	defer vs.VolumeGroupLocks.Release(groupID)
+
 	mgr := rbd.NewManager(vs.driverInstance, nil, req.GetSecrets())
 	defer mgr.Destroy(ctx)
 
 	// resolve the volume group
-	vg, err := mgr.GetVolumeGroupByID(ctx, req.GetVolumeGroupId())
+	vg, err := mgr.GetVolumeGroupByID(ctx, groupID)
 	if err != nil {
 		if errors.Is(err, rbderrors.ErrGroupNotFound) {
-			log.ErrorLog(ctx, "VolumeGroup %q doesn't exists", req.GetVolumeGroupId())
+			log.ErrorLog(ctx, "VolumeGroup %q doesn't exists", groupID)
 
 			return nil, status.Errorf(
 				codes.NotFound,
 				"could not find volume group %q: %s",
-				req.GetVolumeGroupId(),
+				groupID,
 				err.Error())
 		}
 
 		return nil, status.Errorf(
 			codes.Internal,
 			"could not fetch volume group %q: %s",
-			req.GetVolumeGroupId(),
+			groupID,
 			err.Error())
 	}
 	defer vg.Destroy(ctx)
 
-	volumes, mirror, err := mgr.GetMirrorSource(ctx, req.GetVolumeGroupId(), &replication.ReplicationSource{
+	volumes, mirror, err := mgr.GetMirrorSource(ctx, groupID, &replication.ReplicationSource{
 		Type: &replication.ReplicationSource_Volumegroup{
 			Volumegroup: &replication.ReplicationSource_VolumeGroupSource{
-				VolumeGroupId: req.GetVolumeGroupId(),
+				VolumeGroupId: groupID,
 			},
 		},
 	})
@@ -460,7 +494,7 @@ func (vs *VolumeGroupServer) ModifyVolumeGroupMembership(
 			return nil, status.Errorf(
 				codes.Internal,
 				"can't modify group, as it is in promoting state %q",
-				req.GetVolumeGroupId())
+				groupID)
 		}
 
 		remoteSiteStatus, err := sts.GetRemoteSiteStatus(ctx)
@@ -691,26 +725,36 @@ func (vs *VolumeGroupServer) ControllerGetVolumeGroup(
 	ctx context.Context,
 	req *volumegroup.ControllerGetVolumeGroupRequest,
 ) (*volumegroup.ControllerGetVolumeGroupResponse, error) {
+	groupID := req.GetVolumeGroupId()
+
+	// Existence and conflict checks
+	if acquired := vs.VolumeGroupLocks.TryAcquire(groupID); !acquired {
+		log.ErrorLog(ctx, util.GroupOperationAlreadyExistsFmt, groupID)
+
+		return nil, status.Errorf(codes.Aborted, util.GroupOperationAlreadyExistsFmt, groupID)
+	}
+	defer vs.VolumeGroupLocks.Release(groupID)
+
 	mgr := rbd.NewManager(vs.driverInstance, nil, req.GetSecrets())
 	defer mgr.Destroy(ctx)
 
 	// resolve the volume group
-	vg, err := mgr.GetVolumeGroupByID(ctx, req.GetVolumeGroupId())
+	vg, err := mgr.GetVolumeGroupByID(ctx, groupID)
 	if err != nil {
 		if errors.Is(err, rbderrors.ErrGroupNotFound) {
-			log.ErrorLog(ctx, "VolumeGroup %q doesn't exists", req.GetVolumeGroupId())
+			log.ErrorLog(ctx, "VolumeGroup %q doesn't exists", groupID)
 
 			return nil, status.Errorf(
 				codes.NotFound,
 				"could not find volume group %q: %s",
-				req.GetVolumeGroupId(),
+				groupID,
 				err.Error())
 		}
 
 		return nil, status.Errorf(
 			codes.Internal,
 			"could not fetch volume group %q: %s",
-			req.GetVolumeGroupId(),
+			groupID,
 			err.Error())
 	}
 	defer vg.Destroy(ctx)
