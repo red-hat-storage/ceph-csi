@@ -270,17 +270,17 @@ func (rs *ReplicationServer) EnableVolumeReplication(ctx context.Context,
 		return nil, err
 	}
 
-	if acquired := rs.VolumeLocks.TryAcquire(reqID); !acquired {
-		log.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, reqID)
-
-		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, reqID)
+	repSource := req.GetReplicationSource()
+	releaseLock, err := rs.acquireReplicationLock(ctx, reqID, repSource)
+	if err != nil {
+		return nil, err
 	}
-	defer rs.VolumeLocks.Release(reqID)
+	defer releaseLock()
 
 	mgr := rbd.NewManager(rs.driverInstance, req.GetParameters(), req.GetSecrets())
 	defer mgr.Destroy(ctx)
 
-	volumes, mirror, err := mgr.GetMirrorSource(ctx, reqID, req.GetReplicationSource())
+	volumes, mirror, err := mgr.GetMirrorSource(ctx, reqID, repSource)
 	if err != nil {
 		log.ErrorLog(ctx, "failed to get mirror source with id %q: %v", reqID, err)
 
@@ -344,17 +344,17 @@ func (rs *ReplicationServer) DisableVolumeReplication(ctx context.Context,
 	}
 	defer cr.DeleteCredentials()
 
-	if acquired := rs.VolumeLocks.TryAcquire(reqID); !acquired {
-		log.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, reqID)
-
-		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, reqID)
+	repSource := req.GetReplicationSource()
+	releaseLock, err := rs.acquireReplicationLock(ctx, reqID, repSource)
+	if err != nil {
+		return nil, err
 	}
-	defer rs.VolumeLocks.Release(reqID)
+	defer releaseLock()
 
 	mgr := rbd.NewManager(rs.driverInstance, req.GetParameters(), req.GetSecrets())
 	defer mgr.Destroy(ctx)
 
-	volumes, mirror, err := mgr.GetMirrorSource(ctx, reqID, req.GetReplicationSource())
+	volumes, mirror, err := mgr.GetMirrorSource(ctx, reqID, repSource)
 	if err != nil {
 		log.ErrorLog(ctx, "failed to get mirror source with id %q: %v", reqID, err)
 
@@ -412,17 +412,17 @@ func (rs *ReplicationServer) PromoteVolume(ctx context.Context,
 	}
 	defer cr.DeleteCredentials()
 
-	if acquired := rs.VolumeLocks.TryAcquire(reqID); !acquired {
-		log.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, reqID)
-
-		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, reqID)
+	repSource := req.GetReplicationSource()
+	releaseLock, err := rs.acquireReplicationLock(ctx, reqID, repSource)
+	if err != nil {
+		return nil, err
 	}
-	defer rs.VolumeLocks.Release(reqID)
+	defer releaseLock()
 
 	mgr := rbd.NewManager(rs.driverInstance, req.GetParameters(), req.GetSecrets())
 	defer mgr.Destroy(ctx)
 
-	volumes, mirror, err := mgr.GetMirrorSource(ctx, reqID, req.GetReplicationSource())
+	volumes, mirror, err := mgr.GetMirrorSource(ctx, reqID, repSource)
 	if err != nil {
 		log.ErrorLog(ctx, "failed to get mirror source with id %q: %v", reqID, err)
 
@@ -517,17 +517,17 @@ func (rs *ReplicationServer) DemoteVolume(ctx context.Context,
 	}
 	defer cr.DeleteCredentials()
 
-	if acquired := rs.VolumeLocks.TryAcquire(reqID); !acquired {
-		log.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, reqID)
-
-		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, reqID)
+	repSource := req.GetReplicationSource()
+	releaseLock, err := rs.acquireReplicationLock(ctx, reqID, repSource)
+	if err != nil {
+		return nil, err
 	}
-	defer rs.VolumeLocks.Release(reqID)
+	defer releaseLock()
 
 	mgr := rbd.NewManager(rs.driverInstance, req.GetParameters(), req.GetSecrets())
 	defer mgr.Destroy(ctx)
 
-	volumes, mirror, err := mgr.GetMirrorSource(ctx, reqID, req.GetReplicationSource())
+	volumes, mirror, err := mgr.GetMirrorSource(ctx, reqID, repSource)
 	if err != nil {
 		log.ErrorLog(ctx, "failed to get mirror source with id %q: %v", reqID, err)
 
@@ -657,17 +657,17 @@ func (rs *ReplicationServer) ResyncVolume(ctx context.Context,
 	}
 	defer cr.DeleteCredentials()
 
-	if acquired := rs.VolumeLocks.TryAcquire(reqID); !acquired {
-		log.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, reqID)
-
-		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, reqID)
+	repSource := req.GetReplicationSource()
+	releaseLock, err := rs.acquireReplicationLock(ctx, reqID, repSource)
+	if err != nil {
+		return nil, err
 	}
-	defer rs.VolumeLocks.Release(reqID)
+	defer releaseLock()
 
 	mgr := rbd.NewManager(rs.driverInstance, req.GetParameters(), req.GetSecrets())
 	defer mgr.Destroy(ctx)
 
-	volumes, mirror, err := mgr.GetMirrorSource(ctx, reqID, req.GetReplicationSource())
+	volumes, mirror, err := mgr.GetMirrorSource(ctx, reqID, repSource)
 	if err != nil {
 		log.ErrorLog(ctx, "failed to get mirror source with id %q: %v", reqID, err)
 
@@ -893,17 +893,17 @@ func (rs *ReplicationServer) GetVolumeReplicationInfo(ctx context.Context,
 	}
 	defer cr.DeleteCredentials()
 
-	if acquired := rs.VolumeLocks.TryAcquire(reqID); !acquired {
-		log.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, reqID)
-
-		return nil, status.Errorf(codes.Aborted, util.VolumeOperationAlreadyExistsFmt, reqID)
+	repSource := req.GetReplicationSource()
+	releaseLock, err := rs.acquireReplicationLock(ctx, reqID, repSource)
+	if err != nil {
+		return nil, err
 	}
-	defer rs.VolumeLocks.Release(reqID)
+	defer releaseLock()
 
 	mgr := rbd.NewManager(rs.driverInstance, nil, req.GetSecrets())
 	defer mgr.Destroy(ctx)
 
-	volumes, mirror, err := mgr.GetMirrorSource(ctx, reqID, req.GetReplicationSource())
+	volumes, mirror, err := mgr.GetMirrorSource(ctx, reqID, repSource)
 	if err != nil {
 		log.ErrorLog(ctx, "failed to get mirror source with id %q: %v", reqID, err)
 
@@ -1061,4 +1061,47 @@ func checkVolumeUnpublished(ctx context.Context, nodeId string, rv types.Volume)
 	}
 
 	return nil
+}
+
+func (rs *ReplicationServer) acquireReplicationLock(
+	ctx context.Context,
+	reqID string,
+	repSource *replication.ReplicationSource,
+) (func(), error) {
+	if repSource == nil || repSource.GetVolume() != nil {
+		if acquired := rs.VolumeLocks.TryAcquire(reqID); !acquired {
+			log.ErrorLog(ctx, util.VolumeOperationAlreadyExistsFmt, reqID)
+
+			return nil, status.Errorf(
+				codes.Aborted,
+				util.VolumeOperationAlreadyExistsFmt,
+				reqID,
+			)
+		}
+
+		return func() {
+			rs.VolumeLocks.Release(reqID)
+		}, nil
+	}
+
+	if repSource.GetVolumegroup() != nil {
+		if acquired := rs.VolumeGroupLocks.TryAcquire(reqID); !acquired {
+			log.ErrorLog(ctx, util.GroupOperationAlreadyExistsFmt, reqID)
+
+			return nil, status.Errorf(
+				codes.Aborted,
+				util.GroupOperationAlreadyExistsFmt,
+				reqID,
+			)
+		}
+
+		return func() {
+			rs.VolumeGroupLocks.Release(reqID)
+		}, nil
+	}
+
+	return func() {}, status.Error(
+		codes.InvalidArgument,
+		"source not supported",
+	)
 }
