@@ -736,31 +736,6 @@ func isCephMgrSupported(ctx context.Context, clusterID string, err error) (bool,
 	return true, nil
 }
 
-// ensureImageCleanup finds image in trash and if found removes it
-// from trash.
-func (ri *rbdImage) ensureImageCleanup(ctx context.Context) error {
-	err := ri.openIoctx()
-	if err != nil {
-		return err
-	}
-
-	trashInfoList, err := librbd.GetTrashList(ri.ioctx)
-	if err != nil {
-		log.ErrorLog(ctx, "failed to list images in trash: %v", err)
-
-		return err
-	}
-	for _, val := range trashInfoList {
-		if val.Name == ri.RbdImageName {
-			ri.ImageID = val.Id
-
-			return ri.trashRemoveImage(ctx)
-		}
-	}
-
-	return nil
-}
-
 // Delete deletes a ceph image with provision and volume options.
 func (ri *rbdImage) Delete(ctx context.Context) error {
 	image := ri.RbdImageName
@@ -819,6 +794,11 @@ func (ri *rbdImage) trashRemoveImage(ctx context.Context) error {
 	}
 
 	_, err = ta.AddTrashRemove(admin.NewImageSpec(ri.Pool, ri.RadosNamespace, ri.ImageID))
+	if err != nil && errors.Is(err, rados.ErrNotFound) {
+		log.DebugLog(ctx, "image %s (ID %s) not found in trash, already removed", ri, ri.ImageID)
+
+		return nil
+	}
 
 	rbdCephMgrSupported, knownErr := isCephMgrSupported(ctx, ri.ClusterID, err)
 	if rbdCephMgrSupported && err != nil {
@@ -830,6 +810,12 @@ func (ri *rbdImage) trashRemoveImage(ctx context.Context) error {
 	if !rbdCephMgrSupported && knownErr != nil {
 		trashRemoveError := librbd.TrashRemove(ri.ioctx, ri.ImageID, true)
 		if trashRemoveError != nil {
+			if errors.Is(trashRemoveError, librbd.ErrNotFound) {
+				log.DebugLog(ctx, "image %s not found in trash, already removed", ri)
+
+				return nil
+			}
+
 			log.ErrorLog(ctx, "failed to delete rbd image: %s, %v", ri, trashRemoveError)
 
 			return fmt.Errorf(
@@ -843,6 +829,19 @@ func (ri *rbdImage) trashRemoveImage(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// removeImageFromTrash removes an image from trash by its known image ID.
+func (ri *rbdImage) removeImageFromTrash(ctx context.Context) error {
+	if ri.ImageID == "" {
+		return fmt.Errorf("image ID is empty, cannot remove %s from trash", ri)
+	}
+
+	if err := ri.openIoctx(); err != nil {
+		return err
+	}
+
+	return ri.trashRemoveImage(ctx)
 }
 
 // DeleteTempImage deletes the temporary image created for volume datasource.
@@ -866,11 +865,20 @@ func (rv *rbdVolume) DeleteTempImage(ctx context.Context) error {
 	err = tempClone.Delete(ctx)
 	if err != nil {
 		if errors.Is(err, rbderrors.ErrImageNotFound) {
-			return tempClone.ensureImageCleanup(ctx)
-		} else {
-			// return error if it is not ErrImageNotFound
-			return err
+			if rv.ParentInTrash &&
+				rv.ParentName == tempClone.RbdImageName &&
+				rv.ParentImageID != "" {
+				tempClone.ImageID = rv.ParentImageID
+
+				return tempClone.removeImageFromTrash(ctx)
+			}
+
+			log.DebugLog(ctx, "temp clone %s not found and not in trash, already removed", tempClone)
+
+			return nil
 		}
+
+		return err
 	}
 
 	return nil
