@@ -58,7 +58,8 @@ environments.
 
 | Ceph CSI Version | Container Orchestrator Name | Version Tested      |
 | -----------------| --------------------------- | ------------------- |
-| devel (v3.19.0)  | Kubernetes                  | v1.34, v1.35, v1.36 |
+| devel (v3.19.0)  | Kubernetes                  | v1.36, v1.37        |
+| v3.18.1          | Kubernetes                  | v1.34, v1.35, v1.36 |
 | v3.18.0          | Kubernetes                  | v1.34, v1.35, v1.36 |
 | v3.17.1          | Kubernetes                  | v1.34, v1.35, v1.36 |
 | v3.17.0          | Kubernetes                  | v1.33, v1.34, v1.35 |
@@ -150,9 +151,12 @@ in the Kubernetes documentation.
 
 ## Ceph CSI Container images and release compatibility
 
+### Standard images
+
 | Ceph CSI Release/Branch | Container image name         | Image Tag |
 | ----------------------- | ---------------------------- | --------- |
 | devel (Branch)          | quay.io/cephcsi/cephcsi      | canary    |
+| v3.18.1 (Release)       | quay.io/cephcsi/cephcsi      | v3.18.1   |
 | v3.18.0 (Release)       | quay.io/cephcsi/cephcsi      | v3.18.0   |
 | v3.17.1 (Release)       | quay.io/cephcsi/cephcsi      | v3.17.1   |
 | v3.17.0 (Release)       | quay.io/cephcsi/cephcsi      | v3.17.0   |
@@ -209,6 +213,16 @@ in the Kubernetes documentation.
 | v1.1.0 (Release)        | quay.io/cephcsi/cephcsi         | v1.1.0    |
 | v1.0.0 (Branch)         | quay.io/cephcsi/cephfsplugin    | v1.0.0    |
 | v1.0.0 (Branch)         | quay.io/cephcsi/rbdplugin       | v1.0.0    |
+
+### Alternative images for older CPUs
+
+Starting with Ceph-CSI v3.17, the base image moved to Rocky Linux 10 (RHEL 10).
+Since RHEL 10 dropped support for old x86-64-v2 CPUs, that means the image will no
+longer run on some older systems. For compatibility with v2 CPUs, alternative images
+based on Rocky Linux 9 (RHEL 9) are published under the tag name `<image-tag>-rocky9`
+(e.g. `v3.18.0-rocky9` or `canary-rocky9`). These images are built alongside the
+standard images on tag releases, but are not tested to the same standard as the
+newer Rocky Linux 10 images.
 
 ## Contributing to this repo
 
