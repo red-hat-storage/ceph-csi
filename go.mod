@@ -16,7 +16,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.51.4
 	github.com/ceph/ceph-csi/api v0.0.0-00010101000000-000000000000
 	github.com/ceph/ceph-nvmeof/lib/go/nvmeof v0.0.0-20260706125253-734ddd0a44b2
-	github.com/ceph/go-ceph v0.41.0
+	github.com/ceph/go-ceph v0.42.1
 	github.com/container-storage-interface/spec v1.12.1-0.20260720052920-cd9e7ad1ae09
 	github.com/csi-addons/kubernetes-csi-addons v0.14.0
 	github.com/csi-addons/spec v0.2.1-0.20260515055340-d4a373713b9a
@@ -37,11 +37,11 @@ require (
 	golang.org/x/sys v0.49.0
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
-	k8s.io/api v0.37.0
-	k8s.io/apimachinery v0.37.0
+	k8s.io/api v0.37.1
+	k8s.io/apimachinery v0.37.1
 	k8s.io/cloud-provider v0.37.0
 	k8s.io/klog/v2 v2.140.0
-	k8s.io/kubernetes v1.37.0
+	k8s.io/kubernetes v1.37.1
 	k8s.io/mount-utils v0.37.0
 	k8s.io/utils v0.0.0-20260626114624-be93311217bd
 )
@@ -49,7 +49,7 @@ require (
 require (
 	// sigs.k8s.io/controller-runtime wants this version, it gets replaced below
 	k8s.io/client-go v12.0.0+incompatible
-	sigs.k8s.io/controller-runtime v0.24.1
+	sigs.k8s.io/controller-runtime v0.25.2
 )
 
 replace k8s.io/client-go => k8s.io/client-go v0.37.0
