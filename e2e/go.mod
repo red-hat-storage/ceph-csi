@@ -1,8 +1,6 @@
 module github.com/ceph/ceph-csi/e2e
 
-go 1.23.1
-
-toolchain go1.23.4
+go 1.24.13
 
 // my own dependencies
 replace (
