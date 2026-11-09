@@ -1,6 +1,6 @@
 module github.com/ceph/ceph-csi/e2e
 
-go 1.26.4
+go 1.26.7
 
 // my own dependencies
 replace (
