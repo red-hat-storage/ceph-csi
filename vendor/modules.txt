@@ -567,7 +567,7 @@ go.yaml.in/yaml/v2
 # go.yaml.in/yaml/v3 v3.0.4
 ## explicit; go 1.16
 go.yaml.in/yaml/v3
-# golang.org/x/crypto v0.48.0
+# golang.org/x/crypto v0.48.0 => github.com/openshift-sustaining/crypto v0.48.0-sec.4
 ## explicit; go 1.24.0
 golang.org/x/crypto/argon2
 golang.org/x/crypto/blake2b
@@ -1278,3 +1278,4 @@ sigs.k8s.io/yaml
 # github.com/ceph/go-ceph => github.com/red-hat-storage/go-ceph v0.32.1-0.20260112083340-565356f9872c
 # golang.org/x/net => github.com/openshift-sustaining/net v0.50.0-sec.3
 # k8s.io/client-go => k8s.io/client-go v0.34.2
+# golang.org/x/crypto => github.com/openshift-sustaining/crypto v0.48.0-sec.4
