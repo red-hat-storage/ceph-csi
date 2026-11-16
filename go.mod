@@ -1,8 +1,6 @@
 module github.com/ceph/ceph-csi
 
-go 1.24.0
-
-toolchain go1.24.2
+go 1.24.13
 
 // our own API
 replace github.com/ceph/ceph-csi/api => ./api
