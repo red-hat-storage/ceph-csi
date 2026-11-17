@@ -1078,11 +1078,11 @@ func (ri *rbdImage) flattenRbdImage(
 			err)
 		if forceFlatten || depth >= hardlimit {
 			flattenImageErr := ri.flatten()
-			if err != nil {
-				log.ErrorLog(ctx, "rbd failed to flatten image %s %s: %v", ri.Pool, ri.RbdImageName, err)
+			if flattenImageErr != nil {
+				log.ErrorLog(ctx, "rbd failed to flatten image %s %s: %v", ri.Pool, ri.RbdImageName, flattenImageErr)
 
 				return fmt.Errorf(
-					"failed to add task to remove image: %w, failed to flatten image: %w",
+					"failed to add task to flatten image: %w, failed to flatten image: %w",
 					knownErr,
 					flattenImageErr,
 				)
@@ -1091,21 +1091,6 @@ func (ri *rbdImage) flattenRbdImage(
 	}
 
 	return nil
-}
-
-func (ri *rbdImage) getParentName() (string, error) {
-	rbdImage, err := ri.openReadOnly()
-	if err != nil {
-		return "", err
-	}
-	defer rbdImage.Close() //nolint:errcheck // not a critical failure
-
-	parentInfo, err := rbdImage.GetParent()
-	if err != nil {
-		return "", err
-	}
-
-	return parentInfo.Image.ImageName, nil
 }
 
 func (ri *rbdImage) flatten() error {
@@ -1118,13 +1103,16 @@ func (ri *rbdImage) flatten() error {
 	err = rbdImage.Flatten()
 	if err != nil {
 		// rbd image flatten will fail if the rbd image does not have a parent
-		parent, pErr := ri.getParentName()
-		if pErr != nil {
-			return fmt.Errorf("Failed as %w (internal %w)", err, pErr)
-		}
-		if parent == "" {
+		_, pErr := rbdImage.GetParent()
+		if errors.Is(pErr, librbd.ErrNotFound) {
 			return nil
 		}
+
+		if pErr != nil {
+			return fmt.Errorf("failed to flatten: (%w) and get parent: (%w)", err, pErr)
+		}
+
+		return fmt.Errorf("failed to flatten image: %w", err)
 	}
 
 	return nil
@@ -1538,8 +1526,11 @@ func GenVolFromVolID(
 	if mapping != nil {
 		rbdVol, vErr := generateVolumeFromMapping(ctx, mapping, volumeID, vi, cr, secrets)
 		if !ShouldRetryVolumeGeneration(vErr) {
+			vol.Destroy(ctx)
+
 			return rbdVol, vErr
 		}
+		rbdVol.Destroy(ctx)
 	}
 
 	return vol, err
@@ -1585,10 +1576,13 @@ func generateVolumeFromMapping(
 						poolID)
 					pID, err := strconv.ParseInt(mappedPoolID, 10, 64)
 					if err != nil {
-						return vol, err
+						vol.Destroy(ctx)
+
+						return &rbdVolume{}, err
 					}
 					// Add mapping poolID to Identifier
 					nvi.LocationID = pID
+					vol.Destroy(ctx)
 					vol, err = generateVolumeFromVolumeID(ctx, volumeID, nvi, cr, secrets)
 					if !ShouldRetryVolumeGeneration(err) {
 						return vol, err
@@ -1598,7 +1592,9 @@ func generateVolumeFromMapping(
 		}
 	}
 
-	return vol, util.ErrPoolNotFound
+	vol.Destroy(ctx)
+
+	return &rbdVolume{}, util.ErrPoolNotFound
 }
 
 func genVolFromVolumeOptions(
@@ -2790,17 +2786,12 @@ func (rv *rbdVolume) modifyVolumeAttributes(
 		}
 	}
 
-	// No QoS parameters provided - clear any existing QoS of all types.
-	// This happens when VolumeAttributesClass is removed from the PVC.
-	log.DebugLog(ctx, "no QoS parameters in request, clearing existing QoS for volume %s", rv.VolID)
-
-	for _, handler := range handlers {
-		if err := handler.Clear(ctx); err != nil {
-			log.ErrorLog(ctx, "failed to clear QoS for volume %s: %v", rv.VolID, err)
-
-			return err
-		}
-	}
+	// No QoS parameters in the request: leave any existing QoS untouched. The CSI
+	// mutable_parameters contract forbids modifying a volume based on the absence
+	// of keys, so QoS is never cleared implicitly here. To remove a limit, the CO
+	// specifies that key explicitly: "max" for cgroup v2 QoS (krbd) or "0" for
+	// traditional NBD QoS (rbd-nbd).
+	log.DebugLog(ctx, "no QoS parameters in request, leaving existing QoS unchanged for volume %s", rv.VolID)
 
 	return nil
 }
