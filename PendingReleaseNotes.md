@@ -2,6 +2,13 @@
 
 ## Breaking changes
 
+- Journal metadata now uses sharded `csiDirectory` objects for new CSI name
+  mappings. This is a forward-only upgrade for journal metadata: newer
+  ceph-csi versions can read legacy `csiDirectory` entries, but older versions
+  only read the legacy unsharded object and cannot see mappings written to
+  shard oids after the upgrade. Downgrading after new entries have been written
+  in the upgraded version can break idempotent lookups for those entries.
+
 ## Features
 
 1. Added an optional `TLS_MIN_VERSION` setting to the `kmip` KMS provider,
@@ -23,6 +30,9 @@
    context, failback to volume context for backward compatibility when node-server
    is updated, but provisioner is not.
 
+1. Added an optional `--config` command line argument to set the path of the
+   Ceph-CSI config file, defaults to: `/etc/ceph-csi-config/config.json`.
+
 ## NOTE
 
 - The `--setmetadata` flag has been removed. The flag was deprecated in
@@ -30,3 +40,8 @@
 - The `aws-metadata` and `aws-sts-metadata` KMS providers now use
   aws-sdk-go-v2, as aws-sdk-go (v1) has reached end-of-support. No
   configuration changes are required.
+- RBD QoS configured through a `VolumeAttributesClass` is no longer inherited
+  by clones or snapshot restores. Each volume receives only the QoS defined in
+  its own `VolumeAttributesClass`. QoS is never changed based on the absence of
+  keys. To drop a limit, set that key explicitly: `"max"` for cgroup v2 QoS
+  (krbd) or `"0"` for traditional NBD QoS (rbd-nbd).

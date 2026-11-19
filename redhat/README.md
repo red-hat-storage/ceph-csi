@@ -63,6 +63,7 @@ changes required that are not suitable for the upstream Ceph-CSI project.
 1. `redhat/` directory: additional files (like this `README.md`)
 1. `redhat/Containerfile`: used to build the quay.io/ocs-dev/ceph-csi image
 1. `.github/PULL_REQUEST_TEMPLATE/redhat-*`: guidance for creating PRs
+1. `.github/workflows/go-patch-version-bump.yaml`: weekly Go patch bumps
 
 ## Continuous Integration
 
@@ -70,7 +71,12 @@ OpenShift CI (Prow) is used for testing the changes that land in this GitHub
 repository. The configuration of the jobs can be found in the [OpenShift
 Release repository][ocp-release].
 
+A GitHub Actions workflow ([go-patch-version-bump][go-patch-bump]) runs weekly
+(and on demand). It reads the Go version from the OpenShift golang-builder
+image and, when newer, opens or updates a PR via `odf-bot/ceph-csi`.
+
 [sync-pr]: https://github.com/red-hat-storage/ceph-csi/compare/devel...ceph:devel?template=redhat-sync.md
 [backport-pr]: https://github.com/red-hat-storage/ceph-csi/compare/release-4.9...devel?template=redhat-backport.md
 [ds-only-pr]: https://github.com/red-hat-storage/ceph-csi/compare/devel...ceph:devel?template=redhat-downstream-only.md
 [ocp-release]: https://github.com/openshift/release/tree/master/ci-operator/config/red-hat-storage
+[go-patch-bump]: https://github.com/red-hat-storage/ceph-csi/blob/devel/.github/workflows/go-patch-version-bump.yaml

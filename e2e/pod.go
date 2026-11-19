@@ -88,14 +88,22 @@ func waitForDaemonSets(name, ns string, c kubernetes.Interface, t int) error {
 		}
 		dNum := ds.Status.DesiredNumberScheduled
 		ready := ds.Status.NumberReady
+		updated := ds.Status.UpdatedNumberScheduled
 		framework.Logf(
-			"%d / %d pods ready in namespace '%s' in daemonset '%s' (%d seconds elapsed)",
+			"%d / %d pods ready, %d updated in namespace '%s' in daemonset '%s' (%d seconds elapsed)",
 			ready,
 			dNum,
+			updated,
 			ns,
 			ds.ObjectMeta.Name,
 			int(time.Since(start).Seconds()))
 		if ready != dNum {
+			return false, nil
+		}
+		// After a rollout the old pods may still be Ready, so also require
+		// the controller to have observed the generation and every scheduled
+		// pod to run the updated template.
+		if ds.Status.ObservedGeneration < ds.Generation || updated != dNum {
 			return false, nil
 		}
 
@@ -593,6 +601,40 @@ func getKernelVersionFromDaemonset(f *framework.Framework, ns, dsn, cn string) (
 	}
 
 	return kernelRelease, nil
+}
+
+// isFilesystemSupportedByDaemonset checks whether the kernel supports the
+// filesystem on all nodes that run a pod of the daemonset, and tries to load
+// its kernel module where it is missing.
+func isFilesystemSupportedByDaemonset(f *framework.Framework, ns, dsn, cn, fsType string) (bool, error) {
+	selector, err := getDaemonSetLabelSelector(f, ns, dsn)
+	if err != nil {
+		return false, err
+	}
+
+	pods, err := listPods(f, ns, &metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return false, err
+	}
+
+	// exits with 1 if the filesystem is not available, even after modprobe
+	cmd := fmt.Sprintf("grep -qw %[1]s /proc/filesystems && exit 0; "+
+		"modprobe %[1]s; grep -qw %[1]s /proc/filesystems || exit 1", fsType)
+	for i := range pods {
+		_, stdErr, err := execCommandInContainerByPodName(f, cmd, ns, pods[i].Name, cn)
+		if err != nil {
+			if strings.Contains(err.Error(), exitOneErr) {
+				framework.Logf("filesystem %q is not supported on node %s: %s",
+					fsType, pods[i].Spec.NodeName, stdErr)
+
+				return false, nil
+			}
+
+			return false, fmt.Errorf("failed to check for filesystem %q in pod %s: %w", fsType, pods[i].Name, err)
+		}
+	}
+
+	return true, nil
 }
 
 // recreateCSIPods delete the daemonset and deployment pods based on the selectors passed in.
