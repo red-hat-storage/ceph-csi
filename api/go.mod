@@ -1,6 +1,6 @@
 module github.com/ceph/ceph-csi/api
 
-go 1.26.0
+go 1.26.7
 
 require (
 	github.com/ghodss/yaml v1.0.0
